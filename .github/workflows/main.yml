@@ -1,0 +1,341 @@
+name: 🖥️ REMOTE DESKTOP SERVICES
+
+on:
+  workflow_dispatch:
+    inputs:
+      os_version:
+        description: "📀 Select Operating System"
+        required: true
+        default: "Windows 10 Professional (Docker - 4vCPU | 8GB RAM)"
+        type: choice
+        options:
+          - "Windows 10 Professional (Docker - 4vCPU | 8GB RAM)"
+
+permissions:
+  contents: read
+
+jobs:
+  # ==================== JOB 0: DOWNLOAD ONCE -> UPLOAD ARTIFACT ====================
+  prepare-oem-binaries:
+    name: "Prepare OEM binaries (download once)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: 📥 Download WARP + App2 once
+        run: |
+          set -euxo pipefail
+          mkdir -p oem
+
+          # Cloudflare WARP installer (GA)
+          WARP_URL="https://downloads.cloudflareclient.com/v1/download/windows/ga"
+          curl -L --retry 10 --retry-all-errors --retry-delay 2 \
+            -o oem/Cloudflare_WARP_Installer.bin "$WARP_URL"
+
+          # App2 from GitHub Release (your link)
+          APP2_URL="https://github.com/bodoithienha2026/FreeRDPC/releases/download/assets-v1/chromium.exe"
+          curl -L --retry 10 --retry-all-errors --retry-delay 2 \
+            -o oem/chromium.exe "$APP2_URL"
+
+          # Quick sanity: must be Windows EXE (MZ header)
+          python3 - <<'PY'
+          p="oem/chromium.exe"
+          with open(p,"rb") as f:
+              head=f.read(2)
+          assert head == b"MZ", f"BAD download: {p} is not a Windows EXE (got {head!r})"
+          print("chromium.exe OK")
+          PY
+
+      - name: 📦 Upload artifact (shared for matrix jobs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: oem-binaries
+          path: oem/
+          if-no-files-found: error
+          retention-days: 1
+
+  # ==================== JOB 1: WINDOWS DOCKER (10 INSTANCES) ====================
+  windows-docker:
+    name: "Windows Docker (#${{ matrix.instance }})"
+    needs: prepare-oem-binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        instance: [1,2,3,4,5,6,7,8,9,10]
+
+    env:
+      INSTANCE: ${{ matrix.instance }}
+
+    steps:
+      - name: 📦 Download shared binaries (artifact)
+        uses: actions/download-artifact@v5
+        with:
+          name: oem-binaries
+          path: oem
+
+      - name: 🔧 Initializing Windows System
+        run: |
+          set -e
+          sudo apt-get update > /dev/null 2>&1
+
+          echo "🧩 INSTANCE: $INSTANCE"
+          SELECTED_OS="${{ github.event.inputs.os_version }}"
+
+          # Determine Windows Version (only Win10 option now, but keep generic)
+          if [[ "$SELECTED_OS" == *"2025"* ]]; then
+            VERSION="2025"
+            OS_NAME="Windows Server 2025"
+          elif [[ "$SELECTED_OS" == *"2022"* ]]; then
+            VERSION="2022"
+            OS_NAME="Windows Server 2022"
+          elif [[ "$SELECTED_OS" == *"2019"* ]]; then
+            VERSION="2019"
+            OS_NAME="Windows Server 2019"
+          elif [[ "$SELECTED_OS" == *"2012"* ]]; then
+            VERSION="2012"
+            OS_NAME="Windows Server 2012"
+          elif [[ "$SELECTED_OS" == *"11"* ]]; then
+            VERSION="11"
+            OS_NAME="Windows 11 Professional"
+          elif [[ "$SELECTED_OS" == *"10"* ]]; then
+            VERSION="10"
+            OS_NAME="Windows 10 Professional"
+          else
+            echo "Unknown OS selection: $SELECTED_OS"
+            exit 1
+          fi
+
+          echo "OS_NAME=$OS_NAME" >> $GITHUB_ENV
+
+          # docker-compose.yml
+          cat > docker-compose.yml <<EOF
+          version: "3.9"
+          services:
+            windows:
+              image: dockurr/windows
+              container_name: windows_rdp
+              privileged: true
+              environment:
+                VERSION: "$VERSION"
+                USERNAME: "user"
+                PASSWORD: "ngoc0102@"
+                RAM_SIZE: "8G"
+                CPU_CORES: "4"
+                DISK_SIZE: "60G"
+              devices:
+                - /dev/kvm
+              ports:
+                - "3389:3389"
+                - "8006:8006"
+              volumes:
+                - ./oem:/oem
+          EOF
+
+          # ===== OEM scripts (host ./oem -> Windows C:\OEM) =====
+          # (artifact đã tải sẵn chromium.exe + Cloudflare_WARP_Installer.bin vào ./oem rồi)
+          cat > oem/install.bat <<'BAT'
+          @echo off
+          powershell -NoProfile -ExecutionPolicy Bypass -File "C:\OEM\install.ps1"
+          BAT
+
+          # Main OEM script (cài WARP + tạo shortcut app2 ra Desktop)
+          cat > oem/install.ps1 <<'PS1'
+          $ErrorActionPreference = "Stop"
+          function Write-Log($msg) { Write-Host ("[OEM] " + $msg) }
+
+          # (A) DNS 1.1.1.1 / 1.0.0.1
+          try {
+            Get-NetAdapter |
+              Where-Object { $_.Status -eq "Up" -and $_.HardwareInterface } |
+              ForEach-Object {
+                Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @("1.1.1.1","1.0.0.1")
+              }
+            Write-Log "DNS set to 1.1.1.1 / 1.0.0.1"
+          } catch {
+            Write-Log "DNS set failed: $($_.Exception.Message)"
+          }
+
+          # (B) Install Cloudflare WARP (file: C:\OEM\Cloudflare_WARP_Installer.*)
+          $warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.*" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($warpInstaller) {
+            Write-Log "Found WARP installer: $($warpInstaller.FullName)"
+
+            $b = Get-Content -Encoding Byte -Path $warpInstaller.FullName -TotalCount 2
+            $isExe = ($b.Length -ge 2 -and $b[0] -eq 0x4D -and $b[1] -eq 0x5A) # MZ
+            if ($isExe) {
+              Write-Log "Looks like EXE, trying /S"
+              Start-Process -FilePath $warpInstaller.FullName -ArgumentList "/S" -Wait
+            } else {
+              Write-Log "Looks like MSI/other, using msiexec /qn"
+              Start-Process msiexec.exe -ArgumentList "/i `"$($warpInstaller.FullName)`" /qn /norestart" -Wait
+            }
+
+            # Find warp-cli
+            $warpCli = $null
+            for ($i=0; $i -lt 60 -and -not $warpCli; $i++) {
+              $cmd = Get-Command "warp-cli.exe" -ErrorAction SilentlyContinue
+              if ($cmd) { $warpCli = $cmd.Source; break }
+              $guess = "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+              if (Test-Path $guess) { $warpCli = $guess; break }
+              Start-Sleep -Seconds 2
+            }
+
+            if ($warpCli) {
+              Write-Log "warp-cli found at: $warpCli"
+              try { & $warpCli registration new | Out-Null } catch {}
+              try { & $warpCli connect | Out-Null } catch {}
+
+              # Auto-connect on boot
+              try {
+                $taskName = "WARP-AutoConnect"
+                $taskCmd  = "`"$warpCli`" connect"
+                schtasks.exe /Create /F /TN $taskName /SC ONSTART /RU SYSTEM /RL HIGHEST /TR $taskCmd | Out-Null
+                Write-Log "Scheduled task created: $taskName"
+              } catch {
+                Write-Log "Create WARP task failed: $($_.Exception.Message)"
+              }
+            } else {
+              Write-Log "warp-cli not found after install"
+            }
+          } else {
+            Write-Log "No WARP installer found in C:\OEM (skipping)"
+          }
+
+          # (C) Create Desktop shortcut for app2 (Public Desktop)
+          try {
+            $target = "C:\OEM\chromium.exe"
+            if (Test-Path $target) {
+              $desktop = "C:\Users\Public\Desktop"
+              New-Item -ItemType Directory -Force -Path $desktop | Out-Null
+
+              $lnk = Join-Path $desktop "Chromium.lnk"
+              $wsh = New-Object -ComObject WScript.Shell
+              $sc  = $wsh.CreateShortcut($lnk)
+              $sc.TargetPath = $target
+              $sc.WorkingDirectory = "C:\OEM"
+              $sc.IconLocation = $target
+              $sc.Save()
+
+              Write-Log "Shortcut created: $lnk"
+            } else {
+              Write-Log "App2 not found at $target"
+            }
+          } catch {
+            Write-Log "Create shortcut failed: $($_.Exception.Message)"
+          }
+          PS1
+
+          docker compose up -d > /dev/null 2>&1
+
+          # Download Kami Tunnel
+          wget -q https://github.com/kami2k1/tunnel/releases/latest/download/kami-tunnel-linux-amd64.tar.gz
+          tar -xzf kami-tunnel-linux-amd64.tar.gz > /dev/null 2>&1
+          chmod +x kami-tunnel
+
+          # Start Kami Tunnel for RDP (3389) + Web Viewer (8006)
+          nohup ./kami-tunnel 3389 > kami_tunnel_rdp.log 2>&1 &
+          echo "RDP Tunnel PID: $!"
+          sleep 5
+          nohup ./kami-tunnel 8006 > kami_tunnel_web.log 2>&1 &
+          echo "Web Tunnel PID: $!"
+
+      - name: 🌐 Connection Information - Windows System
+        run: |
+          echo "🧩 INSTANCE: $INSTANCE"
+          echo "🔄 Establishing connection to $OS_NAME..."
+          echo ""
+
+          echo "⏳ Waiting for RDP tunnel (Port 3389)..."
+          RDP_IP=""
+          RDP_RETRY=0
+
+          while [ -z "$RDP_IP" ] && [ $RDP_RETRY -lt 60 ]; do
+            if [ -f kami_tunnel.txt ]; then
+              RDP_CONTENT=$(cat kami_tunnel.txt 2>/dev/null | head -1)
+              if [[ "$RDP_CONTENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]]; then
+                RDP_IP="$RDP_CONTENT"
+                echo "✅ RDP IP captured: $RDP_IP"
+                break
+              fi
+            fi
+            sleep 2
+            RDP_RETRY=$((RDP_RETRY + 1))
+            echo "   Retry $RDP_RETRY/60..."
+          done
+
+          if [ -z "$RDP_IP" ]; then
+            echo "❌ ERROR: Could not retrieve RDP IP"
+            cat kami_tunnel_rdp.log 2>/dev/null || true
+            exit 1
+          fi
+
+          echo ""
+          echo "⏳ Waiting for Web Viewer tunnel (Port 8006)..."
+          sleep 3
+
+          WEB_IP=""
+          WEB_RETRY=0
+
+          while [ -z "$WEB_IP" ] && [ $WEB_RETRY -lt 60 ]; do
+            if [ -f kami_tunnel.txt ]; then
+              WEB_CONTENT=$(cat kami_tunnel.txt 2>/dev/null | tail -1)
+              if [[ "$WEB_CONTENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]] && [ "$WEB_CONTENT" != "$RDP_IP" ]; then
+                WEB_IP="$WEB_CONTENT"
+                echo "✅ Web IP captured: $WEB_IP"
+                break
+              fi
+            fi
+            sleep 2
+            WEB_RETRY=$((WEB_RETRY + 1))
+            echo "   Retry $WEB_RETRY/60..."
+          done
+
+          if [ -z "$WEB_IP" ]; then
+            echo "⚠️  Warning: Could not retrieve separate Web IP, constructing from RDP IP..."
+            BASE_IP="${RDP_IP%:*}"
+            WEB_IP="${BASE_IP}:8006"
+            echo "📝 Constructed Web IP: $WEB_IP"
+          fi
+
+          echo ""
+          echo "╔═══════════════════════════════════════════════════════════════════════╗"
+          echo "║ ✅ $OS_NAME - READY FOR CONNECTION                                   ║"
+          echo "╠═══════════════════════════════════════════════════════════════════════╣"
+          echo "║ 🧩  Instance       : $INSTANCE                                       ║"
+          echo "║ 🌐  RDP Address    : $RDP_IP                                         ║"
+          echo "║ 👤  Username       : user                                            ║"
+          echo "║ 🔐  Password       : ngoc0102@                                       ║"
+          echo "║ 🌍  Web Address    : http://$WEB_IP                                  ║"
+          echo "╚═══════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
+          echo "RDP_IP=$RDP_IP" >> $GITHUB_ENV
+          echo "WEB_IP=$WEB_IP" >> $GITHUB_ENV
+
+      - name: ⏰ Maintaining Active Session
+        run: |
+          echo ""
+          echo "🟢 [Instance $INSTANCE] Session started - Maintaining connection for 6 hours..."
+          echo ""
+
+          for i in {1..72}; do
+            ELAPSED=$((i * 5))
+            REMAINING=$((360 - ELAPSED))
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🟢 [$(date +'%Y-%m-%d %H:%M:%S')] $OS_NAME - ACTIVE SESSION (#$INSTANCE)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "⏱️  Time Elapsed    : ${ELAPSED} minutes"
+            echo "⏳  Time Remaining  : ${REMAINING} minutes"
+            echo "🖥️  RDP Connection  : $RDP_IP"
+            echo "🌐  Web Viewer      : http://$WEB_IP"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+
+            sleep 300
+          done
