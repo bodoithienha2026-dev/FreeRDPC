@@ -23,7 +23,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - name: 📥 Download WARP + App2 once
+      - name: 📥 Download WARP once
         run: |
           set -euxo pipefail
           mkdir -p oem
@@ -33,8 +33,6 @@ jobs:
           curl -L --retry 10 --retry-all-errors --retry-delay 2 \
             -o oem/Cloudflare_WARP_Installer.bin "$WARP_URL"
 
-          
-
       - name: 📦 Upload artifact (shared for matrix jobs)
         uses: actions/upload-artifact@v4
         with:
@@ -43,18 +41,15 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # ==================== JOB 1: WINDOWS DOCKER (10 INSTANCES) ====================
+  # ==================== JOB 1: WINDOWS DOCKER (1 INSTANCE) ====================
   windows-docker:
-    name: "Windows Docker (#${{ matrix.instance }})"
+    name: "Windows Docker"
     needs: prepare-oem-binaries
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
-    strategy:
-      fail-fast: false
-
     env:
-      INSTANCE: ${{ matrix.instance }}
+      INSTANCE: 1
 
     steps:
       - name: 📦 Download shared binaries (artifact)
@@ -71,7 +66,7 @@ jobs:
           echo "🧩 INSTANCE: $INSTANCE"
           SELECTED_OS="${{ github.event.inputs.os_version }}"
 
-          # Determine Windows Version (only Win10 option now, but keep generic)
+          # Determine Windows Version
           if [[ "$SELECTED_OS" == *"2025"* ]]; then
             VERSION="2025"
             OS_NAME="Windows Server 2025"
@@ -122,19 +117,19 @@ jobs:
           EOF
 
           # ===== OEM scripts (host ./oem -> Windows C:\OEM) =====
-          # (artifact đã tải sẵn chromium.exe + Cloudflare_WARP_Installer.bin vào ./oem rồi)
           cat > oem/install.bat <<'BAT'
           @echo off
           powershell -NoProfile -ExecutionPolicy Bypass -File "C:\OEM\install.ps1"
           BAT
 
-          
+          # Main OEM script (cài WARP)
+          cat > oem/install.ps1 <<'PS1'
+          $ErrorActionPreference = "Stop"
+          function Write-Log($msg) { Write-Host ("[OEM] " + $msg) }
 
           # (A) DNS 1.1.1.1 / 1.0.0.1
           try {
-            Get-NetAdapter |
-              Where-Object { $_.Status -eq "Up" -and $_.HardwareInterface } |
-              ForEach-Object {
+            Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.HardwareInterface } | ForEach-Object {
                 Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @("1.1.1.1","1.0.0.1")
               }
             Write-Log "DNS set to 1.1.1.1 / 1.0.0.1"
@@ -142,7 +137,7 @@ jobs:
             Write-Log "DNS set failed: $($_.Exception.Message)"
           }
 
-          # (B) Install Cloudflare WARP (file: C:\OEM\Cloudflare_WARP_Installer.*)
+          # (B) Install Cloudflare WARP
           $warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.*" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($warpInstaller) {
             Write-Log "Found WARP installer: $($warpInstaller.FullName)"
@@ -187,8 +182,6 @@ jobs:
           } else {
             Write-Log "No WARP installer found in C:\OEM (skipping)"
           }
-
-         
           PS1
 
           docker compose up -d > /dev/null 2>&1
@@ -267,7 +260,7 @@ jobs:
           echo "╔═══════════════════════════════════════════════════════════════════════╗"
           echo "║ ✅ $OS_NAME - READY FOR CONNECTION                                   ║"
           echo "╠═══════════════════════════════════════════════════════════════════════╣"
-          echo "║ 🧩  Instance       : $INSTANCE                                       ║"
+          echo "║ 🧩  Instance       : $INSTANCE                                               ║"
           echo "║ 🌐  RDP Address    : $RDP_IP                                         ║"
           echo "║ 👤  Username       : user                                            ║"
           echo "║ 🔐  Password       : ngoc0102@                                       ║"
