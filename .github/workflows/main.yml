@@ -1,4 +1,4 @@
-name: 🖥️ REMOTE DESKTOP SERVICES (WARP ONLY)
+name: 🖥️ REMOTE DESKTOP SERVICES
 
 on:
   workflow_dispatch:
@@ -25,19 +25,17 @@ jobs:
     steps:
       - name: 📥 Download Cloudflare WARP
         run: |
-          set -euxo pipefail [cite: 3]
-          mkdir -p oem [cite: 3]
-
-          # Cloudflare WARP installer (GA)
-          [cite_start]WARP_URL="https://downloads.cloudflareclient.com/v1/download/windows/ga" [cite: 3]
-          curl -L --retry 10 --retry-all-errors --retry-delay 2 \
-            [cite_start]-o oem/Cloudflare_WARP_Installer.bin "$WARP_URL" [cite: 3]
+          set -euxo pipefail
+          mkdir -p oem
+          # Cloudflare WARP installer [cite: 3]
+          WARP_URL="https://downloads.cloudflareclient.com/v1/download/windows/ga"
+          curl -L --retry 10 --retry-all-errors --retry-delay 2 -o oem/Cloudflare_WARP_Installer.bin "$WARP_URL"
 
       - name: 📦 Upload artifact
-        [cite_start]uses: actions/upload-artifact@v4 [cite: 5]
+        uses: actions/upload-artifact@v4
         with:
-          [cite_start]name: oem-binaries [cite: 5]
-          [cite_start]path: oem/ [cite: 5]
+          name: oem-binaries
+          path: oem/
           [cite_start]if-no-files-found: error [cite: 6]
           [cite_start]retention-days: 1 [cite: 6]
 
@@ -45,23 +43,23 @@ jobs:
   windows-docker:
     name: "Windows Docker (#${{ matrix.instance }})"
     [cite_start]needs: prepare-oem-binaries [cite: 6]
-    [cite_start]runs-on: ubuntu-latest [cite: 6]
+    runs-on: ubuntu-latest
     [cite_start]timeout-minutes: 360 [cite: 6]
 
     strategy:
       [cite_start]fail-fast: false [cite: 6]
       [cite_start]max-parallel: 10 [cite: 6]
       matrix:
-        [cite_start]instance: [1,2,3,4,5,6,7,8,9,10] [cite: 6]
+        [cite_start]instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] [cite: 6]
 
     env:
       [cite_start]INSTANCE: ${{ matrix.instance }} [cite: 6]
 
     steps:
       - name: 📦 Download shared binaries
-        [cite_start]uses: actions/download-artifact@v5 [cite: 7]
+        uses: actions/download-artifact@v5
         with:
-          [cite_start]name: oem-binaries [cite: 7]
+          name: oem-binaries
           [cite_start]path: oem [cite: 7]
 
       - name: 🔧 Initializing Windows System
@@ -69,19 +67,12 @@ jobs:
           set -e [cite: 8]
           sudo apt-get update > /dev/null 2>&1 [cite: 8]
 
-          [cite_start]SELECTED_OS="${{ github.event.inputs.os_version }}" [cite: 8]
-          # Logic chọn OS giữ nguyên để đảm bảo Windows khởi động đúng [cite: 9, 10, 11, 12, 13, 14]
-          if [[ "$SELECTED_OS" == *"10"* ]]; then
-            VERSION="10"
-            OS_NAME="Windows 10 Professional"
-          else
-            VERSION="10" # Default
-            OS_NAME="Windows 10 Professional"
-          fi
-
+          # Determine Windows Version [cite: 8, 14]
+          VERSION="10"
+          OS_NAME="Windows 10 Professional"
           [cite_start]echo "OS_NAME=$OS_NAME" >> $GITHUB_ENV [cite: 14]
 
-          # docker-compose.yml [cite: 15]
+          # Create docker-compose.yml [cite: 15]
           cat > docker-compose.yml <<EOF
           version: "3.9"
           services:
@@ -105,56 +96,52 @@ jobs:
                 - ./oem:/oem
           EOF
 
-          # OEM scripts tập trung vào WARP [cite: 18, 19]
+          # OEM scripts for WARP installation [cite: 18, 19]
           cat > oem/install.bat <<'BAT'
           @echo off
           powershell -NoProfile -ExecutionPolicy Bypass -File "C:\OEM\install.ps1"
           BAT
 
           cat > oem/install.ps1 <<'PS1'
-          [cite_start]$ErrorActionPreference = "Stop" [cite: 19]
-          
-          # DNS setup [cite: 20, 21]
+          $ErrorActionPreference = "Stop"
+          # DNS Setup [cite: 20, 21]
           try {
-            Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | ForEach-Object {
-                Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @("1.1.1.1","1.0.0.1")
+            Get-NetAdapter | Where-Object { \$_.Status -eq "Up" } | ForEach-Object {
+              Set-DnsClientServerAddress -InterfaceIndex \$_.ifIndex -ServerAddresses @("1.1.1.1","1.0.0.1")
             }
           } catch {}
 
-          # Install Cloudflare WARP [cite: 22, 23, 24]
-          $warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.*" | Select-Object -First 1
-          if ($warpInstaller) {
-            Start-Process -FilePath $warpInstaller.FullName -ArgumentList "/S" -Wait
-            
-            # Đợi và kết nối WARP [cite: 25, 26, 27, 28, 29]
-            Start-Sleep -Seconds 15
-            $warpCli = "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
-            if (Test-Path $warpCli) {
-              & $warpCli registration new | Out-Null
-              & $warpCli connect | Out-Null
+          # Install WARP [cite: 22, 23, 24]
+          \$warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.*" | Select-Object -First 1
+          if (\$warpInstaller) {
+            Start-Process -FilePath \$warpInstaller.FullName -ArgumentList "/S" -Wait
+            Start-Sleep -Seconds 10
+            \$warpCli = "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+            if (Test-Path \$warpCli) {
+              & "\$warpCli" registration new | Out-Null
+              & "\$warpCli" connect | Out-Null
             }
           }
           PS1
 
           [cite_start]docker compose up -d > /dev/null 2>&1 [cite: 35]
 
-          # Tunnels [cite: 35, 36, 37]
+          # Setup Tunnels [cite: 35]
           wget -q https://github.com/kami2k1/tunnel/releases/latest/download/kami-tunnel-linux-amd64.tar.gz
           tar -xzf kami-tunnel-linux-amd64.tar.gz > /dev/null 2>&1
           chmod +x kami-tunnel
-          nohup ./kami-tunnel 3389 > kami_tunnel_rdp.log 2>&1 &
-          sleep 5
-          nohup ./kami-tunnel 8006 > kami_tunnel_web.log 2>&1 &
+          [cite_start]nohup ./kami-tunnel 3389 > kami_tunnel_rdp.log 2>&1 & [cite: 36]
+          [cite_start]sleep 5 [cite: 37]
+          [cite_start]nohup ./kami-tunnel 8006 > kami_tunnel_web.log 2>&1 & [cite: 37]
 
       - name: 🌐 Connection Information
         run: |
-          # Giữ nguyên phần hiển thị IP để ông lấy link kết nối [cite: 38, 39, 40, 51, 52, 53, 54]
-          echo "Instance $INSTANCE ready."
+          echo "Instance $INSTANCE is starting up..." [cite: 39]
+          echo "Please wait a few minutes for the Windows boot process to complete."
 
       - name: ⏰ Maintaining Active Session
         run: |
-          # Vòng lặp duy trì session 6 tiếng [cite: 56, 57, 58, 59]
           for i in {1..72}; do
-            echo "Instance $INSTANCE is running..."
-            sleep 300
+            echo "🟢 [$(date +'%H:%M:%S')] Instance $INSTANCE is active." [cite: 57]
+            sleep 300 [cite: 58]
           done
