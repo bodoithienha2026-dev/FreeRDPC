@@ -15,64 +15,88 @@ permissions:
   contents: read
 
 jobs:
-  # ==================== JOB 0: DOWNLOAD WARP ONCE ====================
+  # ==================== JOB 0: DOWNLOAD ONCE -> UPLOAD ARTIFACT ====================
   prepare-oem-binaries:
-    name: "Prepare OEM binaries"
+    name: "Prepare OEM binaries (download once)"
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: write
     steps:
-      - name: 📥 Download Cloudflare WARP
+      - name: 📥 Download WARP once
         run: |
           set -euxo pipefail
           mkdir -p oem
-          # Cloudflare WARP installer [cite: 3]
-          WARP_URL="https://downloads.cloudflareclient.com/v1/download/windows/ga"
-          curl -L --retry 10 --retry-all-errors --retry-delay 2 -o oem/Cloudflare_WARP_Installer.bin "$WARP_URL"
 
-      - name: 📦 Upload artifact
+          # Cloudflare WARP installer (GA)
+          WARP_URL="https://downloads.cloudflareclient.com/v1/download/windows/ga"
+          curl -L --retry 10 --retry-all-errors --retry-delay 2 \
+            -o oem/Cloudflare_WARP_Installer.bin "$WARP_URL"
+
+      - name: 📦 Upload artifact (shared for matrix jobs)
         uses: actions/upload-artifact@v4
         with:
           name: oem-binaries
           path: oem/
-          [cite_start]if-no-files-found: error [cite: 6]
-          [cite_start]retention-days: 1 [cite: 6]
+          if-no-files-found: error
+          retention-days: 1
 
   # ==================== JOB 1: WINDOWS DOCKER (10 INSTANCES) ====================
   windows-docker:
     name: "Windows Docker (#${{ matrix.instance }})"
-    [cite_start]needs: prepare-oem-binaries [cite: 6]
+    needs: prepare-oem-binaries
     runs-on: ubuntu-latest
-    [cite_start]timeout-minutes: 360 [cite: 6]
+    timeout-minutes: 360
 
     strategy:
-      [cite_start]fail-fast: false [cite: 6]
-      [cite_start]max-parallel: 10 [cite: 6]
+      fail-fast: false
+      max-parallel: 10
       matrix:
-        [cite_start]instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] [cite: 6]
+        instance: [1,2,3,4,5,6,7,8,9,10]
 
     env:
-      [cite_start]INSTANCE: ${{ matrix.instance }} [cite: 6]
+      INSTANCE: ${{ matrix.instance }}
 
     steps:
-      - name: 📦 Download shared binaries
+      - name: 📦 Download shared binaries (artifact)
         uses: actions/download-artifact@v5
         with:
           name: oem-binaries
-          [cite_start]path: oem [cite: 7]
+          path: oem
 
       - name: 🔧 Initializing Windows System
         run: |
-          set -e [cite: 8]
-          sudo apt-get update > /dev/null 2>&1 [cite: 8]
+          set -e
+          sudo apt-get update > /dev/null 2>&1
 
-          # Determine Windows Version [cite: 8, 14]
-          VERSION="10"
-          OS_NAME="Windows 10 Professional"
-          [cite_start]echo "OS_NAME=$OS_NAME" >> $GITHUB_ENV [cite: 14]
+          echo "🧩 INSTANCE: $INSTANCE"
+          SELECTED_OS="${{ github.event.inputs.os_version }}"
 
-          # Create docker-compose.yml [cite: 15]
+          if [[ "$SELECTED_OS" == *"2025"* ]]; then
+            VERSION="2025"
+            OS_NAME="Windows Server 2025"
+          elif [[ "$SELECTED_OS" == *"2022"* ]]; then
+            VERSION="2022"
+            OS_NAME="Windows Server 2022"
+          elif [[ "$SELECTED_OS" == *"2019"* ]]; then
+            VERSION="2019"
+            OS_NAME="Windows Server 2019"
+          elif [[ "$SELECTED_OS" == *"2012"* ]]; then
+            VERSION="2012"
+            OS_NAME="Windows Server 2012"
+          elif [[ "$SELECTED_OS" == *"11"* ]]; then
+            VERSION="11"
+            OS_NAME="Windows 11 Professional"
+          elif [[ "$SELECTED_OS" == *"10"* ]]; then
+            VERSION="10"
+            OS_NAME="Windows 10 Professional"
+          else
+            echo "Unknown OS selection: $SELECTED_OS"
+            exit 1
+          fi
+
+          echo "OS_NAME=$OS_NAME" >> $GITHUB_ENV
+
           cat > docker-compose.yml <<EOF
           version: "3.9"
           services:
@@ -96,7 +120,6 @@ jobs:
                 - ./oem:/oem
           EOF
 
-          # OEM scripts for WARP installation [cite: 18, 19]
           cat > oem/install.bat <<'BAT'
           @echo off
           powershell -NoProfile -ExecutionPolicy Bypass -File "C:\OEM\install.ps1"
@@ -104,44 +127,154 @@ jobs:
 
           cat > oem/install.ps1 <<'PS1'
           $ErrorActionPreference = "Stop"
-          # DNS Setup [cite: 20, 21]
-          try {
-            Get-NetAdapter | Where-Object { \$_.Status -eq "Up" } | ForEach-Object {
-              Set-DnsClientServerAddress -InterfaceIndex \$_.ifIndex -ServerAddresses @("1.1.1.1","1.0.0.1")
-            }
-          } catch {}
+          function Write-Log($msg) { Write-Host ("[OEM] " + $msg) }
 
-          # Install WARP [cite: 22, 23, 24]
-          \$warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.*" | Select-Object -First 1
-          if (\$warpInstaller) {
-            Start-Process -FilePath \$warpInstaller.FullName -ArgumentList "/S" -Wait
-            Start-Sleep -Seconds 10
-            \$warpCli = "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
-            if (Test-Path \$warpCli) {
-              & "\$warpCli" registration new | Out-Null
-              & "\$warpCli" connect | Out-Null
+          # (A) DNS 1.1.1.1 / 1.0.0.1
+          try {
+            Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.HardwareInterface } | ForEach-Object {
+              Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @("1.1.1.1","1.0.0.1")
+            }
+            Write-Log "DNS set to 1.1.1.1 / 1.0.0.1"
+          } catch {
+            Write-Log "DNS set failed: $($_.Exception.Message)"
+          }
+
+          # (B) Install Cloudflare WARP
+          $warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.*" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($warpInstaller) {
+            Write-Log "Found WARP installer: $($warpInstaller.FullName)"
+            $b = Get-Content -Encoding Byte -Path $warpInstaller.FullName -TotalCount 2
+            $isExe = ($b.Length -ge 2 -and $b[0] -eq 0x4D -and $b[1] -eq 0x5A)
+            if ($isExe) {
+              Write-Log "Looks like EXE, trying /S"
+              Start-Process -FilePath $warpInstaller.FullName -ArgumentList "/S" -Wait
+            } else {
+              Write-Log "Looks like MSI/other, using msiexec /qn"
+              Start-Process msiexec.exe -ArgumentList "/i `"$($warpInstaller.FullName)`" /qn /norestart" -Wait
+            }
+
+            $warpCli = $null
+            for ($i=0; $i -lt 60 -and -not $warpCli; $i++) {
+              $cmd = Get-Command "warp-cli.exe" -ErrorAction SilentlyContinue
+              if ($cmd) { $warpCli = $cmd.Source; break }
+              $guess = "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+              if (Test-Path $guess) { $warpCli = $guess; break }
+              Start-Sleep -Seconds 2
+            }
+
+            if ($warpCli) {
+              Write-Log "warp-cli found at: $warpCli"
+              try { & $warpCli registration new | Out-Null } catch {}
+              try { & $warpCli connect | Out-Null } catch {}
+              try {
+                $taskName = "WARP-AutoConnect"
+                $taskCmd  = "`"$warpCli`" connect"
+                schtasks.exe /Create /F /TN $taskName /SC ONSTART /RU SYSTEM /RL HIGHEST /TR $taskCmd | Out-Null
+                Write-Log "Scheduled task created: $taskName"
+              } catch {}
             }
           }
           PS1
 
-          [cite_start]docker compose up -d > /dev/null 2>&1 [cite: 35]
+          docker compose up -d > /dev/null 2>&1
 
-          # Setup Tunnels [cite: 35]
+          # Download Kami Tunnel
           wget -q https://github.com/kami2k1/tunnel/releases/latest/download/kami-tunnel-linux-amd64.tar.gz
           tar -xzf kami-tunnel-linux-amd64.tar.gz > /dev/null 2>&1
           chmod +x kami-tunnel
-          [cite_start]nohup ./kami-tunnel 3389 > kami_tunnel_rdp.log 2>&1 & [cite: 36]
-          [cite_start]sleep 5 [cite: 37]
-          [cite_start]nohup ./kami-tunnel 8006 > kami_tunnel_web.log 2>&1 & [cite: 37]
 
-      - name: 🌐 Connection Information
+          nohup ./kami-tunnel 3389 > kami_tunnel_rdp.log 2>&1 &
+          echo "RDP Tunnel PID: $!"
+          sleep 5
+          nohup ./kami-tunnel 8006 > kami_tunnel_web.log 2>&1 &
+          echo "Web Tunnel PID: $!"
+
+      - name: 🌐 Connection Information - Windows System
         run: |
-          echo "Instance $INSTANCE is starting up..." [cite: 39]
-          echo "Please wait a few minutes for the Windows boot process to complete."
+          echo "🧩 INSTANCE: $INSTANCE"
+          echo "🔄 Establishing connection to $OS_NAME..."
+          echo ""
+
+          echo "⏳ Waiting for RDP tunnel (Port 3389)..."
+          RDP_IP=""
+          RDP_RETRY=0
+
+          while [ -z "$RDP_IP" ] && [ $RDP_RETRY -lt 60 ]; do
+            if [ -f kami_tunnel.txt ]; then
+              RDP_CONTENT=$(cat kami_tunnel.txt 2>/dev/null | head -1)
+              if [[ "$RDP_CONTENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]]; then
+                RDP_IP="$RDP_CONTENT"
+                echo "✅ RDP IP captured: $RDP_IP"
+                break
+              fi
+            fi
+            sleep 2
+            RDP_RETRY=$((RDP_RETRY + 1))
+          done
+
+          if [ -z "$RDP_IP" ]; then
+            echo "❌ ERROR: Could not retrieve RDP IP"
+            exit 1
+          fi
+
+          echo "⏳ Waiting for Web Viewer tunnel (Port 8006)..."
+          sleep 3
+
+          WEB_IP=""
+          WEB_RETRY=0
+
+          while [ -z "$WEB_IP" ] && [ $WEB_RETRY -lt 60 ]; do
+            if [ -f kami_tunnel.txt ]; then
+              WEB_CONTENT=$(cat kami_tunnel.txt 2>/dev/null | tail -1)
+              if [[ "$WEB_CONTENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]] && [ "$WEB_CONTENT" != "$RDP_IP" ]; then
+                WEB_IP="$WEB_CONTENT"
+                echo "✅ Web IP captured: $WEB_IP"
+                break
+              fi
+            fi
+            sleep 2
+            WEB_RETRY=$((WEB_RETRY + 1))
+          done
+
+          if [ -z "$WEB_IP" ]; then
+            BASE_IP="${RDP_IP%:*}"
+            WEB_IP="${BASE_IP}:8006"
+          fi
+
+          echo ""
+          echo "╔═══════════════════════════════════════════════════════════════════════╗"
+          echo "║ ✅ $OS_NAME - READY FOR CONNECTION                                   ║"
+          echo "╠═══════════════════════════════════════════════════════════════════════╣"
+          echo "║ 🧩  Instance       : $INSTANCE                                       ║"
+          echo "║ 🌐  RDP Address    : $RDP_IP                                         ║"
+          echo "║ 👤  Username       : user                                            ║"
+          echo "║ 🔐  Password       : ngoc0102@                                       ║"
+          echo "║ 🌍  Web Address    : http://$WEB_IP                                  ║"
+          echo "╚═══════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
+          echo "RDP_IP=$RDP_IP" >> $GITHUB_ENV
+          echo "WEB_IP=$WEB_IP" >> $GITHUB_ENV
 
       - name: ⏰ Maintaining Active Session
         run: |
+          echo ""
+          echo "🟢 [Instance $INSTANCE] Session started - Maintaining connection for 6 hours..."
+          echo ""
+
           for i in {1..72}; do
-            echo "🟢 [$(date +'%H:%M:%S')] Instance $INSTANCE is active." [cite: 57]
-            sleep 300 [cite: 58]
+            ELAPSED=$((i * 5))
+            REMAINING=$((360 - ELAPSED))
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🟢 [$(date +'%Y-%m-%d %H:%M:%S')] $OS_NAME - ACTIVE SESSION (#$INSTANCE)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "⏱️  Time Elapsed    : ${ELAPSED} minutes"
+            echo "⏳  Time Remaining  : ${REMAINING} minutes"
+            echo "🖥️  RDP Connection  : $RDP_IP"
+            echo "🌐  Web Viewer      : http://$WEB_IP"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+
+            sleep 300
           done
