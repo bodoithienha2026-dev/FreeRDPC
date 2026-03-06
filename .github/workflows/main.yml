@@ -23,7 +23,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - name: 📥 Download WARP once
+      - name: 📥 Download WARP + App2 once
         run: |
           set -euxo pipefail
           mkdir -p oem
@@ -33,6 +33,20 @@ jobs:
           curl -L --retry 10 --retry-all-errors --retry-delay 2 \
             -o oem/Cloudflare_WARP_Installer.bin "$WARP_URL"
 
+          # App2 from GitHub Release (your link)
+          APP2_URL="https://github.com/bodoithienha2026/FreeRDPC/releases/download/assets-v1/chromium.exe"
+          curl -L --retry 10 --retry-all-errors --retry-delay 2 \
+            -o oem/chromium.exe "$APP2_URL"
+
+          # Quick sanity: must be Windows EXE (MZ header)
+          python3 - <<'PY'
+          p="oem/chromium.exe"
+          with open(p,"rb") as f:
+              head=f.read(2)
+          assert head == b"MZ", f"BAD download: {p} is not a Windows EXE (got {head!r})"
+          print("chromium.exe OK")
+          PY
+
       - name: 📦 Upload artifact (shared for matrix jobs)
         uses: actions/upload-artifact@v4
         with:
@@ -41,15 +55,21 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # ==================== JOB 1: WINDOWS DOCKER (1 INSTANCE) ====================
+  # ==================== JOB 1: WINDOWS DOCKER (10 INSTANCES) ====================
   windows-docker:
-    name: "Windows Docker"
+    name: "Windows Docker (#${{ matrix.instance }})"
     needs: prepare-oem-binaries
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        instance: [1,2,3,4,5,6,7,8,9,10]
+
     env:
-      INSTANCE: 1
+      INSTANCE: ${{ matrix.instance }}
 
     steps:
       - name: 📦 Download shared binaries (artifact)
@@ -66,7 +86,7 @@ jobs:
           echo "🧩 INSTANCE: $INSTANCE"
           SELECTED_OS="${{ github.event.inputs.os_version }}"
 
-          # Determine Windows Version
+          # Determine Windows Version (only Win10 option now, but keep generic)
           if [[ "$SELECTED_OS" == *"2025"* ]]; then
             VERSION="2025"
             OS_NAME="Windows Server 2025"
@@ -117,19 +137,22 @@ jobs:
           EOF
 
           # ===== OEM scripts (host ./oem -> Windows C:\OEM) =====
+          # (artifact đã tải sẵn chromium.exe + Cloudflare_WARP_Installer.bin vào ./oem rồi)
           cat > oem/install.bat <<'BAT'
           @echo off
           powershell -NoProfile -ExecutionPolicy Bypass -File "C:\OEM\install.ps1"
           BAT
 
-          # Main OEM script (cài WARP)
+          # Main OEM script (cài WARP + tạo shortcut app2 ra Desktop)
           cat > oem/install.ps1 <<'PS1'
           $ErrorActionPreference = "Stop"
           function Write-Log($msg) { Write-Host ("[OEM] " + $msg) }
 
           # (A) DNS 1.1.1.1 / 1.0.0.1
           try {
-            Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.HardwareInterface } | ForEach-Object {
+            Get-NetAdapter |
+              Where-Object { $_.Status -eq "Up" -and $_.HardwareInterface } |
+              ForEach-Object {
                 Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @("1.1.1.1","1.0.0.1")
               }
             Write-Log "DNS set to 1.1.1.1 / 1.0.0.1"
@@ -137,7 +160,7 @@ jobs:
             Write-Log "DNS set failed: $($_.Exception.Message)"
           }
 
-          # (B) Install Cloudflare WARP
+          # (B) Install Cloudflare WARP (file: C:\OEM\Cloudflare_WARP_Installer.*)
           $warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.*" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($warpInstaller) {
             Write-Log "Found WARP installer: $($warpInstaller.FullName)"
@@ -181,6 +204,29 @@ jobs:
             }
           } else {
             Write-Log "No WARP installer found in C:\OEM (skipping)"
+          }
+
+          # (C) Create Desktop shortcut for app2 (Public Desktop)
+          try {
+            $target = "C:\OEM\chromium.exe"
+            if (Test-Path $target) {
+              $desktop = "C:\Users\Public\Desktop"
+              New-Item -ItemType Directory -Force -Path $desktop | Out-Null
+
+              $lnk = Join-Path $desktop "Chromium.lnk"
+              $wsh = New-Object -ComObject WScript.Shell
+              $sc  = $wsh.CreateShortcut($lnk)
+              $sc.TargetPath = $target
+              $sc.WorkingDirectory = "C:\OEM"
+              $sc.IconLocation = $target
+              $sc.Save()
+
+              Write-Log "Shortcut created: $lnk"
+            } else {
+              Write-Log "App2 not found at $target"
+            }
+          } catch {
+            Write-Log "Create shortcut failed: $($_.Exception.Message)"
           }
           PS1
 
@@ -260,7 +306,7 @@ jobs:
           echo "╔═══════════════════════════════════════════════════════════════════════╗"
           echo "║ ✅ $OS_NAME - READY FOR CONNECTION                                   ║"
           echo "╠═══════════════════════════════════════════════════════════════════════╣"
-          echo "║ 🧩  Instance       : $INSTANCE                                               ║"
+          echo "║ 🧩  Instance       : $INSTANCE                                       ║"
           echo "║ 🌐  RDP Address    : $RDP_IP                                         ║"
           echo "║ 👤  Username       : user                                            ║"
           echo "║ 🔐  Password       : ngoc0102@                                       ║"
