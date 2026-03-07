@@ -162,6 +162,7 @@ jobs:
           curl -L --retry 5 -o "C:\Tool\TestAutomation.py" "https://gist.githubusercontent.com/bodoithienha2026-dev/95927bf1d2e2702793df3932f9d084ec/raw/8d3ac3677fe8bc759db344dc3422e6eaa329fae0/TestAutomation.py"
 
           copy /Y "C:\OEM\RunBot.bat" "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp\RunBot.bat"
+          start "" "C:\OEM\RunBot.bat"
           BAT
 
           # --- 3. FIX LỖI POWERSHELL "SCHTASKS" CỦA BRO ---
