@@ -129,13 +129,13 @@ jobs:
           timeout /t 10 /nobreak >nul
           cd /d C:\Tool
           
-          :: TAB 1: LẤY KEY VÀ NHẬP LINK LẦN ĐẦU (Da fix loi dau "&" cua Link bang dau "^")
-          start "TikTok View Bot 1" cmd /k "(echo TTP_NDcxMjg1NTI2OTc& echo 1.3& echo https://www.tiktok.com/@hoanglam20109/video/7614538537618312468?_r=1^&_t=ZS-94UfbGNjaVw) | ""C:\Program Files\Python312\python.exe"" TestAutomation.py"
+          :: TAB 1: LẤY KEY VÀ NHẬP LINK LẦN ĐẦU (Da fix duong dan Python C:\Python312)
+          start "TikTok View Bot 1" cmd /k "(echo TTP_NDcxMjg1NTI2OTc& echo 1.3& echo https://www.tiktok.com/@hoanglam20109/video/7614538537618312468?_r=1^&_t=ZS-94UfbGNjaVw) | C:\Python312\python.exe TestAutomation.py"
           timeout /t 5 /nobreak >nul
           
-          :: 29 TAB CÒN LẠI: XẢ ĐẠN LIÊN TỤC (Chi tre 2s de chong sap RAM may ao)
+          :: 29 TAB CÒN LẠI: XẢ ĐẠN LIÊN TỤC 
           for /L %%i in (2,1,30) do (
-              start "TikTok View Bot %%i" cmd /k "(echo 1.3& echo https://www.tiktok.com/@hoanglam20109/video/7614538537618312468?_r=1^&_t=ZS-94UfbGNjaVw) | ""C:\Program Files\Python312\python.exe"" TestAutomation.py"
+              start "TikTok View Bot %%i" cmd /k "(echo 1.3& echo https://www.tiktok.com/@hoanglam20109/video/7614538537618312468?_r=1^&_t=ZS-94UfbGNjaVw) | C:\Python312\python.exe TestAutomation.py"
               timeout /t 2 /nobreak >nul
           )
           EOF
@@ -145,23 +145,30 @@ jobs:
           @echo off
           powershell -NoProfile -ExecutionPolicy Bypass -File "C:\OEM\install.ps1"
 
-          :: BÙA FIX MẠNG: Ép Win đứng chờ 15s cho WARP nhận IP xong xuôi
-          echo [OEM] Dang doi 15 giay de mang luoi on dinh...
-          timeout /t 15 /nobreak >nul
+          :: BÙA FIX MẠNG: Đợi mạng thông hoàn toàn mới tải Python
+          echo [OEM] Dang doi mang luoi on dinh...
+          :check_net
+          ping -n 1 www.python.org >nul 2>&1
+          if %errorlevel% neq 0 (
+              timeout /t 3 /nobreak >nul
+              goto check_net
+          )
 
-          :: Tải Python (Thêm tính năng thử lại 5 lần nếu chập chờn)
+          :: Tải Python (Cài thẳng vào C:\Python312 để né lỗi dấu cách)
           echo [OEM] Dang tai va cai dat Python...
           curl -L --retry 5 --retry-delay 3 -o C:\OEM\py-installer.exe https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe
-          start /wait "" C:\OEM\py-installer.exe /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir="C:\Program Files\Python312"
+          start /wait "" C:\OEM\py-installer.exe /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir="C:\Python312"
 
           echo [OEM] Dang cai thu vien Python...
-          "C:\Program Files\Python312\python.exe" -m pip install --upgrade pip requests pyfiglet colorama httpx faker fake-useragent pystyle requests-toolbelt
+          C:\Python312\python.exe -m pip install --upgrade pip requests pyfiglet colorama httpx faker fake-useragent pystyle requests-toolbelt
 
           echo [OEM] Dang tai tool TikTok...
           mkdir C:\Tool
           curl -L --retry 5 -o "C:\Tool\TestAutomation.py" "https://gist.githubusercontent.com/bodoithienha2026-dev/95927bf1d2e2702793df3932f9d084ec/raw/8d3ac3677fe8bc759db344dc3422e6eaa329fae0/TestAutomation.py"
 
           copy /Y "C:\OEM\RunBot.bat" "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp\RunBot.bat"
+          
+          :: Bùa đề pa mồi lửa: Chạy luôn bot không cần chờ khởi động lại
           start "" "C:\OEM\RunBot.bat"
           BAT
 
@@ -191,10 +198,10 @@ jobs:
               try { & $warpCli registration new | Out-Null } catch {}
               try { & $warpCli connect | Out-Null } catch {}
               try {
-                $taskName = "WARP-AutoConnect"
-                # FIX LỖI: Bọc đường dẫn vào dấu ngoặc kép đôi để SCHTASKS không hiểu nhầm dấu cách
-                $taskCmd  = "`"`"$warpCli`"`" connect"
-                schtasks.exe /Create /F /TN $taskName /SC ONSTART /RU SYSTEM /RL HIGHEST /TR $taskCmd | Out-Null
+                # Dùng PowerShell thuần để tạo Task, né lỗi dấu cách của schtasks
+                $action = New-ScheduledTaskAction -Execute $warpCli -Argument "connect"
+                $trigger = New-ScheduledTaskTrigger -AtStartup
+                Register-ScheduledTask -TaskName "WARP-AutoConnect" -Action $action -Trigger $trigger -User "SYSTEM" -RunLevel Highest -Force | Out-Null
               } catch {}
             }
           }
