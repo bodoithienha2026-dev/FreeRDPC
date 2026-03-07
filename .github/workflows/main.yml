@@ -28,7 +28,7 @@ jobs:
           set -euxo pipefail
           mkdir -p oem
 
-          # Cloudflare WARP installer (GA)
+          # Cloudflare WARP installer (GA) - Đổi sang đuôi .msi cho chuẩn
           WARP_URL="https://downloads.cloudflareclient.com/v1/download/windows/ga"
           curl -L --retry 10 --retry-all-errors --retry-delay 2 \
             -o oem/Cloudflare_WARP_Installer.msi "$WARP_URL"
@@ -120,7 +120,7 @@ jobs:
                 - ./oem:/oem
           EOF
 
-          # --- 1. TẠO SCRIPT AUTO-RUN 30 TABS (ÉP TỐC ĐỘ BÀN THỜ) ---
+          # --- 1. TẠO SCRIPT AUTO-RUN 30 TABS ---
           cat > oem/RunBot.bat <<'EOF'
           @echo off
           title Auto Launch 30 Tabs
@@ -140,21 +140,16 @@ jobs:
           )
           EOF
 
-          # --- 2. KỊCH BẢN CÀI ĐẶT (FIX LỖI MẤT MẠNG + RETRY TẢI FILE) ---
+          # --- 2. KỊCH BẢN CÀI ĐẶT ---
           cat > oem/install.bat <<'BAT'
           @echo off
           powershell -NoProfile -ExecutionPolicy Bypass -File "C:\OEM\install.ps1"
 
-          :: BÙA FIX MẠNG: Đợi mạng thông hoàn toàn mới tải Python
-          echo [OEM] Dang doi mang luoi on dinh...
-          :check_net
-          ping -n 1 www.python.org >nul 2>&1
-          if %errorlevel% neq 0 (
-              timeout /t 3 /nobreak >nul
-              goto check_net
-          )
+          :: De cung 15s nhu y bro
+          echo [OEM] Dang doi 15 giay de mang luoi on dinh...
+          timeout /t 15 /nobreak >nul
 
-          :: Tải Python (Cài thẳng vào C:\Python312 để né lỗi dấu cách, xoa cờ InstallAllUsers)
+          :: Tải Python (Cài thẳng vào C:\Python312, khong co InstallAllUsers)
           echo [OEM] Dang tai va cai dat Python...
           curl -L --retry 5 --retry-delay 3 -o C:\OEM\py-installer.exe https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe
           start /wait "" C:\OEM\py-installer.exe /quiet PrependPath=1 Include_pip=1 TargetDir="C:\Python312"
@@ -183,8 +178,8 @@ jobs:
             }
           } catch {}
 
-          # FIX: Cài WARP bằng msiexec do đổi file tải về sang .msi
-          $warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.*" -ErrorAction SilentlyContinue | Select-Object -First 1
+          # FIX: Cai WARP bang msiexec
+          $warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($warpInstaller) {
             Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$($warpInstaller.FullName)`" /qn" -Wait
             
@@ -199,7 +194,6 @@ jobs:
               try { & $warpCli registration new | Out-Null } catch {}
               try { & $warpCli connect | Out-Null } catch {}
               try {
-                # Dùng PowerShell thuần để tạo Task, né lỗi dấu cách của schtasks
                 $action = New-ScheduledTaskAction -Execute $warpCli -Argument "connect"
                 $trigger = New-ScheduledTaskTrigger -AtStartup
                 Register-ScheduledTask -TaskName "WARP-AutoConnect" -Action $action -Trigger $trigger -User "SYSTEM" -RunLevel Highest -Force | Out-Null
