@@ -120,16 +120,63 @@ jobs:
                 - ./oem:/oem
           EOF
 
+          # --- TẠO SCRIPT AUTO-RUN 30 TABS (DÀNH CHO STARTUP) ---
+          cat > oem/RunBot.bat <<'EOF'
+          @echo off
+          title Auto Launch 30 Tabs
+          color 0B
+          
+          echo [He Thong] Dang cho Windows on dinh...
+          timeout /t 10 /nobreak >nul
+          
+          cd /d C:\Tool
+          
+          :: BƯỚC 1: MỞ TAB SỐ 1 ĐỂ TẠO FILE KEY.TXT
+          echo [He Thong] Mo Tab 1 de tao key.txt...
+          start "TikTok View Bot 1" cmd /k "(echo TTP_NDcxMjg1NTI2OTc& echo 1.2& echo https://www.tiktok.com/@10thd_/video/7610054919562824981?lang=en) | ""C:\Program Files\Python312\python.exe"" TestAutomation.py"
+          
+          :: BƯỚC 2: CHỜ TOOL LƯU FILE KEY AN TOÀN
+          echo [He Thong] Cho 5s de tool ghi file key.txt...
+          timeout /t 5 /nobreak >nul
+          
+          :: BƯỚC 3: MỞ NỐT 29 TAB CÒN LẠI (TỔNG LÀ 30 TAB)
+          echo [He Thong] Bung lua 29 tab con lai...
+          for /L %%i in (2,1,30) do (
+              start "TikTok View Bot %%i" cmd /k "(echo 1.2& echo NHAP_LINK_TIKTOK) | ""C:\Program Files\Python312\python.exe"" TestAutomation.py"
+              timeout /t 2 /nobreak >nul
+          )
+          echo [XONG] Da mo du 30 tab ngam!
+          EOF
+
+          # --- TẠO KỊCH BẢN CÀI ĐẶT NGẦM KHI CÀI WINDOWS ---
           cat > oem/install.bat <<'BAT'
           @echo off
+          :: Chạy script mạng và WARP
           powershell -NoProfile -ExecutionPolicy Bypass -File "C:\OEM\install.ps1"
+
+          :: Tải và cài đặt Python ẩn
+          echo [OEM] Dang tai va cai dat Python...
+          curl -L -o C:\OEM\py-installer.exe https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe
+          start /wait "" C:\OEM\py-installer.exe /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir="C:\Program Files\Python312"
+
+          :: Cài đặt thư viện Python
+          echo [OEM] Dang cai thu vien Python...
+          "C:\Program Files\Python312\python.exe" -m pip install --upgrade pip requests pyfiglet colorama httpx faker fake-useragent pystyle requests-toolbelt
+
+          :: Tạo thư mục chạy Tool và kéo code từ Gist
+          echo [OEM] Dang tai tool TikTok...
+          mkdir C:\Tool
+          curl -L "https://gist.githubusercontent.com/bodoithienha2026-dev/95927bf1d2e2702793df3932f9d084ec/raw/8d3ac3677fe8bc759db344dc3422e6eaa329fae0/TestAutomation.py" -o "C:\Tool\TestAutomation.py"
+
+          :: Ném file RunBot vào thư mục Startup để nó tự chạy khi boot vào Windows
+          copy /Y "C:\OEM\RunBot.bat" "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp\RunBot.bat"
           BAT
 
+          # --- CẤU HÌNH WARP ---
           cat > oem/install.ps1 <<'PS1'
           $ErrorActionPreference = "Stop"
           function Write-Log($msg) { Write-Host ("[OEM] " + $msg) }
 
-          # (A) DNS 1.1.1.1 / 1.0.0.1
           try {
             Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.HardwareInterface } | ForEach-Object {
               Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @("1.1.1.1","1.0.0.1")
@@ -139,7 +186,6 @@ jobs:
             Write-Log "DNS set failed: $($_.Exception.Message)"
           }
 
-          # (B) Install Cloudflare WARP
           $warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.*" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($warpInstaller) {
             Write-Log "Found WARP installer: $($warpInstaller.FullName)"
