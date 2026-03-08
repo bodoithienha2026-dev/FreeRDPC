@@ -137,14 +137,13 @@ jobs:
           timeout /t 10 /nobreak >nul
           cd /d C:\Tool
           
-          :: TAB 1: NHẬP KEY (Chỉ nhập 1 lần để tool lưu file key)
-          start "TikTok View Bot 1" cmd /k "(echo ${{ github.event.inputs.tool_key }}& echo 1.3& echo ${{ github.event.inputs.tiktok_link }}) | C:\Python312\python.exe TestAutomation.py"
-          timeout /t 5 /nobreak >nul
+          :: BÙA ÉP KEY: Tạo thẳng file key.txt luôn, tool đéo thèm hỏi nữa!
+          echo ${{ github.event.inputs.tool_key }}> key.txt
           
-          :: 29 TAB CÒN LẠI: (Chỉ cần link)
-          for /L %%i in (2,1,30) do (
-              start "TikTok View Bot %%i" cmd /k "(echo 1.3& echo ${{ github.event.inputs.tiktok_link }}) | C:\Python312\python.exe TestAutomation.py"
-              timeout /t 2 /nobreak >nul
+          :: GỌI 30 TAB LIÊN TỤC (Tự nhập 1.1 và Link, giãn cách 15s)
+          for /L %%i in (1,1,30) do (
+              start "TikTok View Bot %%i" cmd /k "(echo 1.1& echo ${{ github.event.inputs.tiktok_link }}) | C:\Python312\python.exe TestAutomation.py"
+              timeout /t 15 /nobreak >nul
           )
           EOF
 
@@ -308,4 +307,3 @@ jobs:
 
             sleep 300
           done
-
