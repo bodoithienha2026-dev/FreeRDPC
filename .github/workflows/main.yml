@@ -10,6 +10,14 @@ on:
         type: choice
         options:
           - "Windows 10 Professional (Docker - 4vCPU | 8GB RAM)"
+      tool_key:
+        description: "🔑 Nhập Key Tool hôm nay:"
+        required: true
+        default: "TTP_..."
+      tiktok_link:
+        description: "🔗 Nhập Link TikTok (⚠️ NHỚ XÓA ĐUÔI TỪ DẤU ?_r=... TRỞ ĐI):"
+        required: true
+        default: "https://www.tiktok.com/@..."
 
 permissions:
   contents: read
@@ -120,7 +128,7 @@ jobs:
                 - ./oem:/oem
           EOF
 
-          # --- 1. TẠO SCRIPT AUTO-RUN 30 TABS ---
+          # --- 1. TẠO SCRIPT AUTO-RUN 30 TABS (TỰ ĐỘNG ĐIỀN KEY VÀ LINK TỪ GIAO DIỆN) ---
           cat > oem/RunBot.bat <<'EOF'
           @echo off
           title Auto Launch 30 Tabs
@@ -129,13 +137,13 @@ jobs:
           timeout /t 10 /nobreak >nul
           cd /d C:\Tool
           
-          :: TAB 1: (ĐÃ CHẶT ĐUÔI LINK TIKTOK CHO SẠCH SẼ)
-          start "TikTok View Bot 1" cmd /k "(echo TTP_NDcxMjg1NTI2OTc& echo 1.3& echo https://www.tiktok.com/@hoanglam20109/video/7614538537618312468) | C:\Python312\python.exe TestAutomation.py"
+          :: TAB 1: NHẬP KEY (Chỉ nhập 1 lần để tool lưu file key)
+          start "TikTok View Bot 1" cmd /k "(echo ${{ github.event.inputs.tool_key }}& echo 1.3& echo ${{ github.event.inputs.tiktok_link }}) | C:\Python312\python.exe TestAutomation.py"
           timeout /t 5 /nobreak >nul
           
-          :: 29 TAB CÒN LẠI: (ĐÃ CHẶT ĐUÔI LINK TIKTOK)
+          :: 29 TAB CÒN LẠI: (Chỉ cần link)
           for /L %%i in (2,1,30) do (
-              start "TikTok View Bot %%i" cmd /k "(echo 1.3& echo https://www.tiktok.com/@hoanglam20109/video/7614538537618312468) | C:\Python312\python.exe TestAutomation.py"
+              start "TikTok View Bot %%i" cmd /k "(echo 1.3& echo ${{ github.event.inputs.tiktok_link }}) | C:\Python312\python.exe TestAutomation.py"
               timeout /t 2 /nobreak >nul
           )
           EOF
@@ -145,11 +153,9 @@ jobs:
           @echo off
           powershell -NoProfile -ExecutionPolicy Bypass -File "C:\OEM\install.ps1"
 
-          :: De cung 15s
           echo [OEM] Dang doi 15 giay de mang luoi on dinh...
           timeout /t 15 /nobreak >nul
 
-          :: Tải Python (Cài thẳng vào C:\Python312)
           echo [OEM] Dang tai va cai dat Python...
           curl -L --retry 5 --retry-delay 3 -o C:\OEM\py-installer.exe https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe
           start /wait "" C:\OEM\py-installer.exe /quiet PrependPath=1 Include_pip=1 TargetDir="C:\Python312"
@@ -163,11 +169,10 @@ jobs:
 
           copy /Y "C:\OEM\RunBot.bat" "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp\RunBot.bat"
           
-          :: Bùa đề pa mồi lửa
           start "" "C:\OEM\RunBot.bat"
           BAT
 
-          # --- 3. FIX LỖI POWERSHELL "SCHTASKS" ---
+          # --- 3. POWERSHELL "SCHTASKS" ---
           cat > oem/install.ps1 <<'PS1'
           $ErrorActionPreference = "Stop"
           function Write-Log($msg) { Write-Host ("[OEM] " + $msg) }
@@ -178,7 +183,6 @@ jobs:
             }
           } catch {}
 
-          # FIX: Cai WARP bang msiexec
           $warpInstaller = Get-ChildItem -Path "C:\OEM" -Filter "Cloudflare_WARP_Installer.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($warpInstaller) {
             Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$($warpInstaller.FullName)`" /qn" -Wait
@@ -304,3 +308,4 @@ jobs:
 
             sleep 300
           done
+
