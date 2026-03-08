@@ -15,7 +15,7 @@ on:
         required: true
         default: "TTP_..."
       tiktok_link:
-        description: "🔗 Nhập Link TikTok (⚠️ NHỚ XÓA ĐUÔI TỪ DẤU ?_r=... TRỞ ĐI):"
+        description: "🔗 Nhập Link TikTok (Copy link để sẵn ở đây lúc vào RDP dán cho lẹ):"
         required: true
         default: "https://www.tiktok.com/@..."
 
@@ -128,7 +128,7 @@ jobs:
                 - ./oem:/oem
           EOF
 
-          # --- 1. TẠO SCRIPT AUTO-RUN 30 TABS (TỰ ĐỘNG ĐIỀN KEY VÀ LINK TỪ GIAO DIỆN) ---
+          # --- 1. TẠO SCRIPT AUTO-RUN 30 TABS (TẠO KEY RỒI MỞ MỘC) ---
           cat > oem/RunBot.bat <<'EOF'
           @echo off
           title Auto Launch 30 Tabs
@@ -137,13 +137,13 @@ jobs:
           timeout /t 10 /nobreak >nul
           cd /d C:\Tool
           
-          :: BÙA ÉP KEY: Tạo thẳng file key.txt luôn, tool đéo thèm hỏi nữa!
-          echo ${{ github.event.inputs.tool_key }}> key.txt
+          :: BÙA THÔNG MINH: Lấy Key từ Github tạo thành file key.txt luôn, không dính dấu cách
+          echo ${{ github.event.inputs.tool_key }}>key.txt
           
-          :: GỌI 30 TAB LIÊN TỤC (Tự nhập 1.1 và Link, giãn cách 15s)
+          :: Gọi 30 tab mộc lên (giãn cách 5s để Win đỡ lag và chống văng tool)
           for /L %%i in (1,1,30) do (
-              start "TikTok View Bot %%i" cmd /k "(echo 1.1& echo ${{ github.event.inputs.tiktok_link }}) | C:\Python312\python.exe TestAutomation.py"
-              timeout /t 15 /nobreak >nul
+              start "TikTok View Bot %%i" cmd /k "C:\Python312\python.exe TestAutomation.py"
+              timeout /t 5 /nobreak >nul
           )
           EOF
 
